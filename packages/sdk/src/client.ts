@@ -48,7 +48,7 @@ export class StipendClient {
 
     const paymentId = `pay_${randomBytes(12).toString('hex')}`;
 
-    const logAttempt = (outcome: 'blocked' | 'succeeded', reason?: string): void => {
+    const logAttempt = (outcome: 'blocked' | 'succeeded', reason?: string, holdId?: string): void => {
       this.opts.attemptLog?.append({
         ts: Date.now(),
         payment_id: paymentId,
@@ -57,6 +57,7 @@ export class StipendClient {
         amount: quote.amount,
         outcome,
         ...(reason ? { reason } : {}),
+        ...(holdId ? { hold_id: holdId } : {}),
         resource,
         sellerUrl: base,
       });
@@ -67,8 +68,23 @@ export class StipendClient {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       const code = codeFromPanic(message);
-      logAttempt('blocked', code);
-      throw new StipendError(code, `payment blocked by the engine: ${message}`);
+      // A policy limit block (cap or budget) is a holdable event: file
+      // it in the engine's on chain queue so the owner can decide on
+      // chain, not just in this local log. The hold takes the payment
+      // id as its id, so the two records line up.
+      let holdId: string | undefined;
+      if (code === 'CAP' || code === 'BUDGET') {
+        try {
+          await engine.requestHold(paymentId, agentId, quote);
+          holdId = paymentId;
+        } catch {
+          // Filing is best effort; the block itself is the fact.
+        }
+      }
+      logAttempt('blocked', code, holdId);
+      const err = new StipendError(code, `payment blocked by the engine: ${message}`);
+      err.holdId = holdId;
+      throw err;
     }
 
     const record = await engine.pollPayment(paymentId);

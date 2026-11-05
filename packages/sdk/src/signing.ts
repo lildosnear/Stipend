@@ -7,6 +7,7 @@
  * ed25519 (PKCS8 for private keys, SPKI for public keys).
  */
 import {
+  createHash,
   createPrivateKey,
   createPublicKey,
   randomBytes,
@@ -111,6 +112,22 @@ export function verifyQuote(vaultId: string, quote: EngineQuote, merchantPublicK
     quoteId: quote.quote_id,
   });
   return verifyPayload(payload, quote.signature, merchantPublicKeyBase64);
+}
+
+/**
+ * The quote hash the engine stores on a payment: base64 sha256 of the
+ * canonical quote payload. Sellers compare a payment's quote_hash
+ * against this value to bind the payment to the exact quote claimed.
+ */
+export function quoteHash(vaultId: string, quote: EngineQuote): string {
+  const payload = quotePayload(vaultId, {
+    recipient: quote.recipient,
+    amount: quote.amount,
+    termsHash: Buffer.from(quote.terms_hash, 'base64'),
+    expiryNs: quote.expiry_ns,
+    quoteId: quote.quote_id,
+  });
+  return createHash('sha256').update(payload).digest('base64');
 }
 
 /** Build a fully signed exception grant with the owner's approval key. */

@@ -81,3 +81,29 @@ export interface PaymentRecord {
   /** base64 sha256 of the canonical quote payload */
   quote_hash: string;
 }
+
+/** Lifecycle states of an on chain hold. */
+export type HoldStatus =
+  | 'PendingApproval'
+  | 'Approved'
+  | 'Rejected'
+  | 'Expired'
+  | 'Executed';
+
+/** A hold record as stored in the engine's approval queue. */
+export interface HoldRecord {
+  agent: string;
+  recipient: string;
+  /** decimal string, yoctoNEAR */
+  amount: string;
+  /** base64 sha256 of the canonical quote payload */
+  quote_hash: string;
+  /** base64 vendor quote key the quote was verified against */
+  merchant_key: string;
+  /** Why the payment was held: CAP or BUDGET */
+  reason: string;
+  status: HoldStatus;
+  created_ns: number;
+  expires_ns: number;
+  payment_id: string | null;
+}

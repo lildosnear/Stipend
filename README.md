@@ -6,7 +6,7 @@ Stipend is an SDK and on chain policy engine that any agent wallet or AI applica
 
 Built at NEAR Hackathon 2026 (AI Security & Defense, Agent Economy). Status: version one, NEAR testnet.
 
-**Live on NEAR testnet:** the policy engine is deployed at `stipend.testnet`, with a demo agent (cap 0.05 NEAR per payment, budget 1 NEAR per day) buying from a test seller. Every flow described below has been run against it end to end: normal buys settle and deliver, an over cap buy is held and then settled after an owner signed approval, and expired quotes, forged prices, and unknown vendors are all blocked with their reasons.
+**Live on NEAR testnet:** the policy engine is deployed at `stipend.testnet`, with a demo agent (cap 0.05 NEAR per payment, budget 1 NEAR per day) buying from a test seller. Every flow described below has been run against it end to end: normal buys settle and deliver, an over cap buy is filed as an on chain hold and settles after the owner approves it in the queue, and expired quotes, forged prices, and unknown vendors are all blocked with their reasons.
 
 ## Why
 
@@ -17,7 +17,7 @@ Agents are starting to hold real spending power, and the usual protection is a w
 1. The owner opens a stipend for an agent in the policy engine contract: cap per payment, budget per day, approved vendors.
 2. A vendor prices a resource and signs a quote, so an agent cannot invent a price.
 3. The agent pays through the SDK. The contract checks the payment against the stipend before settling it.
-4. A payment outside the stipend is blocked, or held in an approvals queue. The owner can approve a held payment once with a signed grant.
+4. A payment that breaks only a policy limit, the cap or the daily budget, is filed as a hold in the engine's on chain approval queue, with a lifecycle: PendingApproval, then Approved and Executed, or Rejected, or Expired after 24 hours. The owner decides on chain; approval waives the cap for that payment, and the daily budget is checked again when the money moves. Anything else, an unknown vendor, a bad signature, an expired quote, is blocked outright and recorded.
 5. The owner can pause all payments or revoke an agent at any time. Every decision, allowed or blocked, is recorded.
 
 ## Integrate it
@@ -91,8 +91,13 @@ await owner.setStipend({
   allowlist: [{ account: "seller.testnet", quote_key: "<base64 quote key>", label: "Test data API" }],
 });
 
-// Held payments are approved one by one with a signed grant:
-// await owner.approvePayment({ agentId, paymentId, quote });
+// The on chain holds queue: list, approve (decision plus execution),
+// reject. Approving settles the held payment under a fresh payment id.
+// await owner.listHolds();
+// await owner.approveHold(holdId);
+// await owner.rejectHold(holdId);
+// A one off signed grant path also exists: owner.approvePayment(...)
+// settles a single payment directly, without the queue.
 // The owner can also pauseAll(), resumeAll(), revoke(agentId) and
 // reactivate(agentId). Blocked attempts are read from the attempt log
 // (see the owner console in apps/console for a working holds queue).
@@ -103,7 +108,7 @@ await owner.setStipend({
 - `contracts/policy-engine` — the on chain policy engine (Rust, NEAR).
 - `packages/sdk` — the TypeScript SDK: agent client, seller helper, owner calls.
 - `apps/reference-app` — a sample AI application integrated with the SDK, end to end.
-- `apps/console` — a small owner console: stipends, holds queue, blocked attempts log. A demo surface over the SDK.
+- `apps/console` — a small owner console: stipends, the on chain holds queue, blocked attempts log. Admin actions require an owner token (printed once in the server startup log, or set STIPEND_CONSOLE_TOKEN), and the server binds localhost unless CONSOLE_HOST says otherwise.
 
 ## Running the demo
 
@@ -141,11 +146,11 @@ SELLER_KEY_PATH=../../keys/<seller>.json \
 SELLER_QUOTE_PRIV_PATH=../../keys/stipend-seller-quote.priv.b64 \
 AGENT_ACCOUNT_ID=<engine> AGENT_KEY_PATH=../../keys/<engine>.json \
 npm run seller   # in one terminal
-npm run agent    # in another: three small buys settle, the 0.08 NEAR buy is held at the cap
+npm run agent    # in another: three small buys settle, the 0.08 NEAR buy is held at the cap and filed on chain
 npm run attacks  # expired quote, forged price, unknown vendor: all blocked, each with its reason
 ```
 
-Run the owner console and approve the held payment from the Holds page:
+Run the owner console and approve the held payment from the Holds page. The server prints an owner token at startup; the page asks for it the first time you approve, pause, or revoke:
 
 ```sh
 cd apps/console
@@ -162,7 +167,7 @@ No deploy needed. From the repo root:
 ```sh
 npm install
 npm run build
-npm test   # 13 of 13, covering signing, amount handling, and a full purchase flow
+npm test   # 15 of 15, covering signing, amount handling, a full purchase flow, and the seller quote binding
 ```
 
 ## Roadmap (not in version one)

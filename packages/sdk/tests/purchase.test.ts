@@ -19,7 +19,7 @@ import { createStipendClient } from '../src/client.js';
 import { EngineClient, type EngineTransport } from '../src/engine.js';
 import { StipendError } from '../src/errors.js';
 import { createSellerApp } from '../src/seller.js';
-import { generateEd25519Keypair } from '../src/signing.js';
+import { generateEd25519Keypair, quoteHash } from '../src/signing.js';
 import type { EngineQuote, PaymentRecord } from '../src/types.js';
 
 const CONTRACT = 'engine.testnet';
@@ -59,7 +59,9 @@ function fakeEngine(panicWith?: string): { engine: EngineClient; calls: Recorded
         amount: quote.amount,
         day: 20000,
         status: 'Succeeded',
-        quote_hash: 'aGFzaA==',
+        // The chain stores the hash of the exact quote paid under; the
+        // fake computes it the same way the contract does.
+        quote_hash: quoteHash(CONTRACT, quote),
       };
       return record;
     },
@@ -89,7 +91,10 @@ beforeAll(async () => {
     contractId: CONTRACT,
     sellerAccountId: SELLER_ACCOUNT,
     quotePrivateKeyBase64: sellerKeys.privateKeyBase64,
-    priceTable: { [RESOURCE]: { amount: PRICE, asset: 'NEAR' } },
+    priceTable: {
+      [RESOURCE]: { amount: PRICE, asset: 'NEAR' },
+      'data:other': { amount: PRICE, asset: 'NEAR' },
+    },
     deliver: () => ({ answer: 42 }),
   });
   server = await new Promise<Server>((resolve) => {
@@ -161,5 +166,78 @@ describe('purchase flow', () => {
     expect(logged[0]?.outcome).toBe('blocked');
     expect(logged[0]?.reason).toBe('CAP');
     expect(logged[0]?.resource).toBe(RESOURCE);
+  });
+
+  it('seller binds a payment to the exact quote it was made for', async () => {
+    // One real purchase first, so a Succeeded payment exists.
+    const client = createStipendClient({
+      engine: shared.engine,
+      agentId: AGENT,
+      sellerBaseUrl: sellerUrl,
+    });
+    await client.purchase(RESOURCE);
+    const paid = shared.calls.filter((c) => c.method === 'request_payment').at(-1);
+    const paymentId = paid!.args['payment_id'] as string;
+
+    const claimWith = async (resource: string) => {
+      const qRes = await fetch(`${sellerUrl}/vault-quote?resource=${encodeURIComponent(resource)}`);
+      const { quote } = (await qRes.json()) as { quote: EngineQuote };
+      return fetch(`${sellerUrl}/pay`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ payment_id: paymentId, quote_id: quote.quote_id }),
+      });
+    };
+
+    // A fresh quote for a different resource at the same price must not
+    // be claimable with the earlier payment.
+    const cross = await claimWith('data:other');
+    expect(cross.status).toBe(402);
+    expect(((await cross.json()) as { error: string }).error).toContain('not made for this quote');
+
+    // Nor can the same payment claim the same resource twice through a
+    // second fresh quote.
+    const replay = await claimWith(RESOURCE);
+    expect(replay.status).toBe(402);
+    expect(((await replay.json()) as { error: string }).error).toContain('not made for this quote');
+  });
+
+  it('files an on chain hold when the engine blocks on the cap', async () => {
+    const calls: RecordedCall[] = [];
+    const transport: EngineTransport = {
+      async call(method, args) {
+        calls.push({ method, args });
+        if (method === 'request_payment') {
+          throw new Error(
+            'engine call failed: {"ExecutionError":"Smart contract panicked: per-payment cap exceeded"}',
+          );
+        }
+        return 'PendingApproval';
+      },
+      async view() {
+        return null;
+      },
+    };
+    const engine = new EngineClient({
+      networkId: 'testnet',
+      nodeUrl: 'http://127.0.0.1:0',
+      contractId: CONTRACT,
+      accountId: 'runner.testnet',
+      privateKey: 'ed25519:unused-with-transport',
+      transport,
+    });
+    const client = createStipendClient({ engine, agentId: AGENT, sellerBaseUrl: sellerUrl });
+
+    const err = await client.purchase(RESOURCE).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(StipendError);
+    expect((err as StipendError).code).toBe('CAP');
+    const holdCall = calls.find((c) => c.method === 'request_hold');
+    expect(holdCall).toBeTruthy();
+    expect(holdCall!.args['hold_id']).toBe(holdCall!.args['hold_id']);
+    expect((err as StipendError).holdId).toBe(holdCall!.args['hold_id']);
+    expect(holdCall!.args['agent_id']).toBe(AGENT);
   });
 });

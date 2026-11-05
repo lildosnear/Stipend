@@ -27,7 +27,24 @@ function showMessage(text, isError) {
 }
 
 async function api(path, opts) {
-  const res = await fetch(path, opts);
+  const send = () => {
+    const headers = { ...((opts && opts.headers) || {}) };
+    if (opts && opts.method === 'POST') {
+      const token = sessionStorage.getItem('stipend-console-token');
+      if (token) headers['x-console-token'] = token;
+    }
+    return fetch(path, { ...(opts || {}), headers });
+  };
+  let res = await send();
+  if (res.status === 401 && opts && opts.method === 'POST') {
+    const token = window.prompt(
+      'Owner token for admin actions (printed once in the console server startup log):',
+    );
+    if (token) {
+      sessionStorage.setItem('stipend-console-token', token);
+      res = await send();
+    }
+  }
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new Error((body && body.error) || `HTTP ${res.status}`);
   return body;
@@ -114,15 +131,33 @@ async function loadPayments() {
 async function loadHolds() {
   const rows = await api('/api/holds');
   const html = table(
-    ['When', 'Agent', 'Resource', 'Amount', 'Reason', 'Action'],
-    rows.map((a, i) => [
-      esc(when(a.ts)),
-      esc(a.agent),
-      esc(a.resource ?? ''),
-      esc(fmtNear(a.amount)),
-      badge(a.reason || '', 'warn'),
-      `<button data-approve="${i}">Approve</button>`,
-    ]),
+    ['When', 'Agent', 'Recipient', 'Amount', 'Reason', 'Status', 'Action'],
+    rows.map((h, i) => {
+      let action = '';
+      if (h.status === 'PendingApproval') {
+        action =
+          `<button data-approve="${i}">Approve</button> ` +
+          `<button data-reject="${i}">Reject</button>`;
+      } else if (h.status === 'Approved') {
+        action = `<button data-approve="${i}">Execute</button>`;
+      }
+      return [
+        esc(when(Math.round(Number(h.created_ns) / 1e6))),
+        esc(h.agent),
+        esc(h.recipient),
+        esc(fmtNear(h.amount)),
+        badge(h.reason || '', 'warn'),
+        badge(
+          h.status,
+          h.status === 'Executed'
+            ? 'good'
+            : h.status === 'Rejected' || h.status === 'Expired'
+              ? 'bad'
+              : 'warn',
+        ),
+        action,
+      ];
+    }),
   );
   document.getElementById('holds-table').innerHTML = html;
   return rows;
@@ -230,26 +265,32 @@ document.getElementById('stipends-table').addEventListener('click', async (e) =>
 });
 
 document.getElementById('holds-table').addEventListener('click', async (e) => {
-  const btn = e.target.closest('button[data-approve]');
+  const approveBtn = e.target.closest('button[data-approve]');
+  const rejectBtn = e.target.closest('button[data-reject]');
+  const btn = approveBtn || rejectBtn;
   if (!btn) return;
-  const attempt = holdsCache[Number(btn.dataset.approve)];
-  if (!attempt) return;
+  const hold = holdsCache[Number(btn.dataset.approve ?? btn.dataset.reject)];
+  if (!hold) return;
   btn.disabled = true;
   try {
-    const record = await api('/api/holds/approve', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        agent: attempt.agent,
-        resource: attempt.resource,
-        sellerUrl: attempt.sellerUrl,
-        amount: attempt.amount,
-      }),
-    });
-    showMessage(`approved and settled: ${record.status}, ${fmtNear(record.amount)} to ${record.recipient}`);
+    if (approveBtn) {
+      const record = await api('/api/holds/approve', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ hold_id: hold.hold_id }),
+      });
+      showMessage(`approved and settled: ${record.status}, ${fmtNear(record.amount)} to ${record.recipient}`);
+    } else {
+      await api('/api/holds/reject', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ hold_id: hold.hold_id }),
+      });
+      showMessage(`hold ${hold.hold_id} rejected`);
+    }
     load('holds');
   } catch (err) {
-    showMessage(`approval failed: ${err.message}`, true);
+    showMessage(`action failed: ${err.message}`, true);
     btn.disabled = false;
   }
 });

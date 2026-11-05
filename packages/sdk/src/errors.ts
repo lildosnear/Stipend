@@ -6,6 +6,8 @@
 
 export class StipendError extends Error {
   readonly code: string;
+  /** Set when a blocked payment was filed as an on chain hold. */
+  holdId?: string;
 
   constructor(code: string, message: string) {
     super(message);

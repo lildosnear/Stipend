@@ -10,7 +10,7 @@
 import { randomBytes } from 'node:crypto';
 import type { EngineClient } from './engine.js';
 import { signGrant } from './signing.js';
-import type { AllowlistEntry, EngineQuote, PaymentRecord } from './types.js';
+import type { AllowlistEntry, EngineQuote, HoldRecord, PaymentRecord } from './types.js';
 
 export interface OwnerToolsOptions {
   engine: EngineClient;
@@ -87,6 +87,34 @@ export function createOwnerTools(opts: OwnerToolsOptions) {
         if (existing) return existing;
       }
       return engine.pollPayment(params.paymentId);
+    },
+
+    // ----- the on chain hold queue ---------------------------------------
+
+    /** The engine's approval queue, read from chain. */
+    listHolds(offset = 0, limit = 50): Promise<[string, HoldRecord][]> {
+      return engine.listHolds(offset, limit);
+    },
+
+    /**
+     * Approve an on chain hold and execute it: the decision and the
+     * settlement are separate on chain steps, run here in sequence.
+     * Returns the settled payment record.
+     */
+    async approveHold(holdId: string): Promise<PaymentRecord> {
+      await engine.approveHold(holdId);
+      const paymentId = `pay_${randomBytes(12).toString('hex')}`;
+      const status = await engine.executeHold(holdId, paymentId);
+      if (status !== 'InFlight') {
+        const existing = await engine.getPayment(paymentId);
+        if (existing) return existing;
+      }
+      return engine.pollPayment(paymentId);
+    },
+
+    /** Reject an on chain hold. Terminal. */
+    rejectHold(holdId: string): Promise<string> {
+      return engine.rejectHold(holdId);
     },
 
     /** Pause every payment. */

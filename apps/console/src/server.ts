@@ -9,17 +9,12 @@
  * EngineClient covers most views; get_owner and get_total_in_flight are
  * read through raw RPC view calls because the SDK does not wrap them.
  */
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type Request, type Response } from 'express';
-import {
-  AttemptLog,
-  EngineClient,
-  createOwnerTools,
-  type EngineQuote,
-} from '@stipend/sdk';
+import { AttemptLog, EngineClient, createOwnerTools } from '@stipend/sdk';
 
 const APP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -66,6 +61,15 @@ const ATTEMPTS_PATH = env('STIPEND_ATTEMPTS_PATH')
   ? path.resolve(env('STIPEND_ATTEMPTS_PATH') as string)
   : path.resolve(APP_DIR, '../../data/attempts.json');
 const PORT = Number(env('PORT') ?? '8282');
+const HOST = env('CONSOLE_HOST') ?? '127.0.0.1';
+/**
+ * Owner token guarding every state changing call. The console process
+ * holds the engine owner key, so an unauthenticated admin endpoint
+ * would hand that power to anyone who can reach the port. Set
+ * STIPEND_CONSOLE_TOKEN to choose the token; otherwise one is
+ * generated at boot and printed once in the startup log.
+ */
+const CONSOLE_TOKEN = env('STIPEND_CONSOLE_TOKEN') ?? randomBytes(16).toString('hex');
 
 const ownerKey = readKeyJson(OWNER_KEY_PATH);
 const engine = new EngineClient({
@@ -156,6 +160,25 @@ const currentDay = (): number => Math.floor((Date.now() * 1e6) / 86_400_000_000_
 const app = express();
 app.use(express.json({ limit: '256kb' }));
 
+// Owner authentication for state changing calls: every POST under /api
+// must carry the owner token in the x-console-token header. Requiring
+// a custom header also defeats cross site form posts (CSRF), since a
+// foreign page cannot set it without a CORS preflight this server
+// never grants. Reads stay open; the server binds localhost by
+// default, and CONSOLE_HOST is the explicit opt in to expose it.
+app.use((req, res, next) => {
+  if (req.method === 'POST' && req.path.startsWith('/api/')) {
+    const given = req.header('x-console-token');
+    const a = Buffer.from(given ?? '');
+    const b = Buffer.from(CONSOLE_TOKEN);
+    if (!given || a.length !== b.length || !timingSafeEqual(a, b)) {
+      res.status(401).json({ error: 'owner token required' });
+      return;
+    }
+  }
+  next();
+});
+
 const fail = (res: Response, e: unknown): void => {
   res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
 };
@@ -241,49 +264,72 @@ app.get('/api/attempts', (_req, res) => {
   res.json(attempts.list());
 });
 
-app.get('/api/holds', (_req, res) => {
-  const holds = attempts
-    .list()
-    .filter((a) => a.outcome === 'blocked' && (a.reason === 'CAP' || a.reason === 'BUDGET'))
-    .map((a) => ({ ...a, approvable: true }));
-  res.json(holds);
-});
+app.get(
+  '/api/holds',
+  wrap(async (_req, res) => {
+    const entries = await engine.listHolds(0, 200);
+    const rows = entries
+      .slice()
+      .reverse()
+      .map(([holdId, h]) => ({
+        hold_id: holdId,
+        agent: h.agent,
+        recipient: h.recipient,
+        amount: h.amount,
+        reason: h.reason,
+        status: h.status,
+        created_ns: h.created_ns,
+        expires_ns: h.expires_ns,
+        payment_id: h.payment_id,
+      }));
+    res.json(rows);
+  }),
+);
 
 app.post(
   '/api/holds/approve',
   wrap(async (req, res) => {
-    const body = req.body as {
-      agent?: string;
-      resource?: string;
-      sellerUrl?: string;
-      amount?: string;
-    };
-    if (!body.agent || !body.resource || !body.sellerUrl || body.amount === undefined) {
-      res.status(400).json({ error: 'agent, resource, sellerUrl and amount are required' });
+    const body = req.body as { hold_id?: string };
+    if (!body.hold_id) {
+      res.status(400).json({ error: 'hold_id is required' });
       return;
     }
-    const sellerUrl = body.sellerUrl.replace(/\/+$/, '');
-    const quoteRes = await fetch(
-      `${sellerUrl}/vault-quote?resource=${encodeURIComponent(body.resource)}`,
-    );
-    if (!quoteRes.ok) {
-      res.status(502).json({ error: `seller quote request failed: HTTP ${quoteRes.status}` });
+    const hold = await engine.getHold(body.hold_id);
+    if (!hold) {
+      res.status(404).json({ error: `unknown hold ${body.hold_id}` });
       return;
     }
-    const { quote } = (await quoteRes.json()) as { quote: EngineQuote };
-    if (quote.amount !== String(body.amount)) {
-      res.status(409).json({
-        error: `fresh quote amount ${quote.amount} does not match the held amount ${String(body.amount)}`,
-      });
+    if (hold.status === 'PendingApproval') {
+      // The SDK owner tool runs the decision and the execution as the
+      // two separate on chain steps they are.
+      const record = await owner.approveHold(body.hold_id);
+      const after = await engine.getHold(body.hold_id);
+      res.json({ payment_id: after?.payment_id ?? null, ...record });
       return;
     }
-    const paymentId = `pay_${randomBytes(12).toString('hex')}`;
-    const record = await owner.approvePayment({
-      agentId: body.agent,
-      paymentId,
-      quote,
-    });
-    res.json({ payment_id: paymentId, ...record });
+    if (hold.status === 'Approved') {
+      // Already decided, execution still outstanding (for example the
+      // daily budget blocked the first attempt): execute only.
+      const paymentId = `pay_${randomBytes(12).toString('hex')}`;
+      await engine.executeHold(body.hold_id, paymentId);
+      const record = await engine.pollPayment(paymentId);
+      res.json({ payment_id: paymentId, ...record });
+      return;
+    }
+    res.status(409).json({ error: `hold is ${hold.status}, not approvable` });
+  }),
+);
+
+app.post(
+  '/api/holds/reject',
+  wrap(async (req, res) => {
+    const body = req.body as { hold_id?: string };
+    if (!body.hold_id) {
+      res.status(400).json({ error: 'hold_id is required' });
+      return;
+    }
+    const status = await owner.rejectHold(body.hold_id);
+    res.json({ ok: true, hold_id: body.hold_id, status });
   }),
 );
 
@@ -318,6 +364,7 @@ app.post(
 
 app.use(express.static(path.join(APP_DIR, 'public')));
 
-app.listen(PORT, () => {
-  console.log(`stipend console on :${PORT} — engine ${CONTRACT_ID}`);
+app.listen(PORT, HOST, () => {
+  console.log(`stipend console on ${HOST}:${PORT} — engine ${CONTRACT_ID}`);
+  console.log(`owner token for admin actions: ${CONSOLE_TOKEN}`);
 });

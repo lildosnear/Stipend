@@ -20,6 +20,8 @@ export interface AttemptRecord {
   outcome: 'blocked' | 'succeeded';
   /** Stipend error code when blocked */
   reason?: string;
+  /** On chain hold id when the blocked payment was filed for approval */
+  hold_id?: string;
   resource?: string;
   sellerUrl?: string;
 }

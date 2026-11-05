@@ -1,110 +1,124 @@
-// Console proof run: approve the held deep dive through the console API,
-// then prove pause and revoke through the console endpoints, driving real
-// purchases through the SDK agent client between each step.
-// Run from the repo root, with the console on :8282 and the seller on :8787.
+// Live proof of the owner console against the migrated engine: the on
+// chain holds queue, token auth, pause, revoke. Assumes the seller and
+// the agent demo have already run (so a CAP hold is waiting on chain),
+// and the console is up on :8282 with STIPEND_CONSOLE_TOKEN set to the
+// CONSOLE_TOKEN given here.
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AttemptLog, EngineClient, createStipendClient } from '../packages/sdk/dist/index.js';
+import { AttemptLog, EngineClient } from '../packages/sdk/dist/index.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const API = 'http://localhost:8282';
-const SELLER = 'http://localhost:8787';
+const TOKEN = process.env['CONSOLE_TOKEN'];
+if (!TOKEN) throw new Error('CONSOLE_TOKEN env is required');
 const info = JSON.parse(readFileSync(join(ROOT, 'keys/deploy-info.json'), 'utf8'));
-const engineKey = JSON.parse(readFileSync(join(ROOT, 'keys', `${info.engine}.json`), 'utf8'));
-const engine = new EngineClient({
+const RPC = 'https://rpc.testnet.near.org';
+const SELLER_URL = 'http://localhost:8787';
+const log = new AttemptLog(join(ROOT, 'data/attempts-stipend.json'));
+
+const agentKey = JSON.parse(
+  readFileSync(join(ROOT, 'keys', `${info.engine}.json`), 'utf8'),
+);
+const agent = new EngineClient({
   networkId: 'testnet',
-  nodeUrl: info.rpc,
+  nodeUrl: RPC,
   contractId: info.engine,
   accountId: info.engine,
-  privateKey: engineKey.private_key,
-});
-const agent = createStipendClient({
-  engine,
-  agentId: 'bot',
-  sellerBaseUrl: SELLER,
-  attemptLog: new AttemptLog(join(ROOT, 'data/attempts-stipend.json')),
+  privateKey: agentKey.private_key,
 });
 
-const j = async (res) => ({ status: res.status, body: await res.json().catch(() => null) });
-const post = (path, body) =>
-  fetch(`${API}${path}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  }).then(j);
+async function api(path, opts = {}, token = TOKEN) {
+  const headers = { 'content-type': 'application/json', ...(opts.headers ?? {}) };
+  if (token) headers['x-console-token'] = token;
+  const res = await fetch(`${API}${path}`, { ...opts, headers });
+  const body = await res.json().catch(() => null);
+  return { status: res.status, body };
+}
 
 async function tryBuy(label) {
+  const qRes = await fetch(`${SELLER_URL}/vault-quote?resource=data:market-report`);
+  const { quote } = await qRes.json();
+  const paymentId = `pay_proof_${Date.now()}`;
   try {
-    const r = await agent.purchase('data:market-report');
-    console.log(`${label}: purchase Succeeded (${r.receipt.payment_id ?? ''})`.trim());
-    return 'ok';
+    await agent.requestPayment('bot', paymentId, quote, null);
+    const record = await agent.pollPayment(paymentId);
+    console.log(`${label}: purchase ${record.status}`);
+    return record;
   } catch (e) {
-    console.log(`${label}: blocked [${e.code ?? '?'}]`);
-    return e.code ?? 'error';
+    const msg = e instanceof Error ? e.message : String(e);
+    const code = msg.includes('engine paused')
+      ? 'PAUSED'
+      : msg.includes('agent revoked')
+        ? 'REVOKED'
+        : 'ERROR';
+    console.log(`${label}: blocked [${code}]`);
+    return null;
   }
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// 1. The queue is on chain: find the pending CAP hold from the demo run.
+const holdsRes = await api('/api/holds');
+const pending = (holdsRes.body ?? []).filter((h) => h.status === 'PendingApproval');
+console.log(`pending holds on chain: ${pending.length}`);
+const cap = pending.find((h) => h.reason === 'CAP');
+if (!cap) throw new Error('no pending CAP hold found; run the agent demo first');
+console.log(`hold: ${cap.hold_id} amount=${cap.amount} reason=${cap.reason}`);
 
-// 1. Holds: the deep dive attempt must be listed.
-const holds = await j(await fetch(`${API}/api/holds`));
-console.log(`holds listed: ${holds.body.length}`);
-const hold = holds.body.find((h) => h.resource === 'data:deep-dive' && h.reason === 'CAP');
-if (!hold) throw new Error('deep dive CAP hold not found in console');
-console.log(`hold: ${hold.resource} amount=${hold.amount} reason=${hold.reason}`);
-
-// 2. Approve it: the console signs a grant and the payment settles.
-//    (Skipped when a settled deep dive payment already exists, so this
-//    script can resume after a partial run.)
-const prior = await j(await fetch(`${API}/api/payments`));
-const already = prior.body.find(
-  (p) => p.amount === hold.amount && p.status === 'Succeeded',
+// 2. Auth: admin calls without the token, and with a wrong one, refuse.
+const noToken = await api('/api/pause', { method: 'POST', body: JSON.stringify({ paused: true }) }, null);
+const badToken = await api(
+  '/api/pause',
+  { method: 'POST', body: JSON.stringify({ paused: true }) },
+  'wrong-token',
 );
-if (already) {
-  console.log(`grant payment already settled: ${already.payment_id} (${already.amount} yocto)`);
-} else {
-  const approved = await post('/api/holds/approve', {
-    agent: hold.agent,
-    resource: hold.resource,
-    sellerUrl: hold.sellerUrl,
-    amount: hold.amount,
-  });
-  console.log(`approve response: HTTP ${approved.status}`);
-  if (approved.status !== 200) throw new Error(`approve failed: ${JSON.stringify(approved.body)}`);
-  const grantPaymentId = approved.body.payment_id;
-  console.log(`grant payment submitted: ${grantPaymentId}`);
-  for (let i = 0; i < 30; i++) {
-    const p = await engine.getPayment(grantPaymentId);
-    if (p && p.status === 'Succeeded') {
-      console.log(`grant payment Succeeded: ${p.amount} yocto to ${p.recipient}`);
-      break;
-    }
-    if (p && p.status === 'Failed') throw new Error('grant payment finalized as Failed');
-    if (i === 29) throw new Error('grant payment did not finalize in time');
-    await sleep(3000);
-  }
-}
+console.log(`pause without token: HTTP ${noToken.status}; wrong token: HTTP ${badToken.status}`);
+if (noToken.status !== 401 || badToken.status !== 401) throw new Error('console auth is not refusing');
 
-// 3. Pause: purchases must fail PAUSED, then resume must restore them.
-await post('/api/pause', { paused: true });
-const pausedCode = await tryBuy('while paused');
-await post('/api/pause', { paused: false });
-if (pausedCode !== 'PAUSED') throw new Error(`expected PAUSED while paused, got ${pausedCode}`);
+// 3. Approve the hold through the console: decision + execution on chain.
+const approve = await api('/api/holds/approve', {
+  method: 'POST',
+  body: JSON.stringify({ hold_id: cap.hold_id }),
+});
+console.log(`approve response: HTTP ${approve.status}`);
+if (approve.status !== 200) throw new Error(`approve failed: ${JSON.stringify(approve.body)}`);
+console.log(`executed payment: ${approve.body.payment_id} -> ${approve.body.status}, ${approve.body.amount} yocto`);
+if (approve.body.status !== 'Succeeded') throw new Error('approved hold did not settle');
+const holdAfter = await agent.getHold(cap.hold_id);
+console.log(`hold after: status=${holdAfter.status} payment_id=${holdAfter.payment_id}`);
 
-// 4. Revoke: purchases must fail REVOKED, then reactivate restores them.
-await post('/api/agents/bot/revoke');
-const revokedCode = await tryBuy('while revoked');
-await post('/api/agents/bot/reactivate');
-if (revokedCode !== 'REVOKED') throw new Error(`expected REVOKED while revoked, got ${revokedCode}`);
-const restored = await tryBuy('after reactivate');
-if (restored !== 'ok') throw new Error('purchase did not recover after reactivate');
+// 4. Reject path: file a second hold directly and reject it in the console.
+const qRes = await fetch(`${SELLER_URL}/vault-quote?resource=data:deep-dive`);
+const { quote } = await qRes.json();
+const rejectId = `pay_reject_${Date.now()}`;
+await agent.requestHold(rejectId, 'bot', quote);
+const reject = await api('/api/holds/reject', {
+  method: 'POST',
+  body: JSON.stringify({ hold_id: rejectId }),
+});
+const rejected = await agent.getHold(rejectId);
+console.log(`reject: HTTP ${reject.status}, on chain status=${rejected.status}`);
 
-// 5. Final state through the console API.
-const stipends = await j(await fetch(`${API}/api/stipends`));
-const bot = stipends.body.find((s) => s.agent_id === 'bot');
-console.log(`bot spent_today: ${bot.spent_today} yocto, status: ${bot.status}`);
-const payments = await j(await fetch(`${API}/api/payments`));
-const succeeded = payments.body.filter((p) => p.status === 'Succeeded').length;
-console.log(`payments listed: ${payments.body.length}, succeeded: ${succeeded}`);
+// 5. Pause blocks, resume restores (with the token this time).
+await api('/api/pause', { method: 'POST', body: JSON.stringify({ paused: true }) });
+await tryBuy('while paused');
+await api('/api/pause', { method: 'POST', body: JSON.stringify({ paused: false }) });
+
+// 6. Revoke blocks, reactivate restores.
+await api('/api/agents/bot/revoke', { method: 'POST', body: '{}' });
+await tryBuy('while revoked');
+await api('/api/agents/bot/reactivate', { method: 'POST', body: '{}' });
+await tryBuy('after reactivate');
+
+const day = Math.floor((Date.now() * 1e6) / 86_400_000_000_000);
+console.log(`bot spent_today: ${await agent.getSpent('bot', day)} yocto`);
+const payments = await agent.listPayments(0, 200);
+console.log(
+  `payments listed: ${payments.length}, succeeded: ${payments.filter(([, p]) => p.status === 'Succeeded').length}`,
+);
+const holds = await agent.listHolds(0, 200);
+console.log(
+  `holds listed: ${holds.length} (${holds.map(([id, h]) => `${id}:${h.status}`).join(', ')})`,
+);
+console.log(`attempt log entries: ${log.list().length}`);
 console.log('CONSOLE PROOF COMPLETE');

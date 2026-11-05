@@ -15,7 +15,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import express from 'express';
 import type { EngineClient } from './engine.js';
-import { signQuote } from './signing.js';
+import { quoteHash, signQuote } from './signing.js';
 import type { EngineQuote } from './types.js';
 
 export interface SellerPrice {
@@ -111,6 +111,14 @@ export function createSellerApp(opts: SellerOptions): ReturnType<typeof express>
     const price = opts.priceTable[stored.resource];
     if (!price || payment.amount !== price.amount.toString()) {
       res.status(402).json({ error: 'payment amount does not match the quoted price' });
+      return;
+    }
+    // Bind the payment to this exact quote: the engine stores the hash
+    // of the quote the payment was made under, and it must equal the
+    // hash of the quote being claimed. Without this, a payment made for
+    // one quote could claim any other quote at the same price.
+    if (payment.quote_hash !== quoteHash(opts.contractId, stored.quote)) {
+      res.status(402).json({ error: 'payment was not made for this quote' });
       return;
     }
     stored.paid = true;

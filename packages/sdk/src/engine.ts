@@ -15,6 +15,7 @@ import type {
   AllowlistEntry,
   EngineGrant,
   EngineQuote,
+  HoldRecord,
   PaymentRecord,
   StipendAgent,
 } from './types.js';
@@ -176,6 +177,10 @@ function normalizeAgent(agent: StipendAgent): StipendAgent {
   };
 }
 
+function normalizeHold(hold: HoldRecord): HoldRecord {
+  return { ...hold, amount: decimalString(hold.amount) };
+}
+
 export class EngineClient {
   readonly contractId: string;
   private readonly transport: EngineTransport;
@@ -213,6 +218,62 @@ export class EngineClient {
       payment_id: paymentId,
     })) as PaymentRecord | null;
     return payment ? normalizePayment(payment) : null;
+  }
+
+  // ----- the on chain hold queue -------------------------------------------
+
+  /**
+   * File a policy blocked payment as an on chain hold for the owner.
+   * The hold id doubles as the attempted payment's id for traceability.
+   * Returns the hold status (PendingApproval for a fresh hold).
+   */
+  async requestHold(holdId: string, agentId: string, quote: EngineQuote): Promise<string> {
+    const res = await this.transport.call('request_hold', {
+      hold_id: holdId,
+      agent_id: agentId,
+      quote,
+    });
+    return res as string;
+  }
+
+  async getHold(holdId: string): Promise<HoldRecord | null> {
+    const hold = (await this.transport.view('get_hold', {
+      hold_id: holdId,
+    })) as HoldRecord | null;
+    return hold ? normalizeHold(hold) : null;
+  }
+
+  async listHolds(offset = 0, limit = 50): Promise<[string, HoldRecord][]> {
+    const rows = (await this.transport.view('list_holds', { offset, limit })) as [
+      string,
+      HoldRecord,
+    ][];
+    return rows.map(([id, hold]) => [id, normalizeHold(hold)]);
+  }
+
+  async getHoldCount(): Promise<number> {
+    return (await this.transport.view('get_hold_count', {})) as number;
+  }
+
+  /** Owner decision on a hold. Execution is a separate step. */
+  async approveHold(holdId: string): Promise<string> {
+    return (await this.transport.call('approve_hold', { hold_id: holdId })) as string;
+  }
+
+  async rejectHold(holdId: string): Promise<string> {
+    return (await this.transport.call('reject_hold', { hold_id: holdId })) as string;
+  }
+
+  async expireHold(holdId: string): Promise<string> {
+    return (await this.transport.call('expire_hold', { hold_id: holdId })) as string;
+  }
+
+  /** Settle an approved hold under a fresh payment id. */
+  async executeHold(holdId: string, paymentId: string): Promise<string> {
+    return (await this.transport.call('execute_hold', {
+      hold_id: holdId,
+      payment_id: paymentId,
+    })) as string;
   }
 
   /** Poll until the payment reaches a terminal status. */

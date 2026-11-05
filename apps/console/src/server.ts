@@ -53,25 +53,33 @@ function readSeed(filePath: string): string {
 }
 
 const CONTRACT_ID = required('STIPEND_CONTRACT_ID');
-const OWNER_ACCOUNT_ID = required('STIPEND_OWNER_ACCOUNT_ID');
-const OWNER_KEY_PATH = required('STIPEND_OWNER_KEY_PATH');
-const APPROVAL_PRIV_PATH = required('STIPEND_APPROVAL_PRIV_PATH');
+const OWNER_ACCOUNT_ID = env('STIPEND_OWNER_ACCOUNT_ID') ?? CONTRACT_ID;
+const OWNER_KEY_PATH = env('STIPEND_OWNER_KEY_PATH');
+const APPROVAL_PRIV_PATH = env('STIPEND_APPROVAL_PRIV_PATH');
 const RPC_URL = env('STIPEND_RPC_URL') ?? 'https://rpc.testnet.near.org';
 const ATTEMPTS_PATH = env('STIPEND_ATTEMPTS_PATH')
   ? path.resolve(env('STIPEND_ATTEMPTS_PATH') as string)
   : path.resolve(APP_DIR, '../../data/attempts.json');
 const PORT = Number(env('PORT') ?? '8282');
 const HOST = env('CONSOLE_HOST') ?? '127.0.0.1';
-/**
- * Owner token guarding every state changing call. The console process
- * holds the engine owner key, so an unauthenticated admin endpoint
- * would hand that power to anyone who can reach the port. Set
- * STIPEND_CONSOLE_TOKEN to choose the token; otherwise one is
- * generated at boot and printed once in the startup log.
- */
-const CONSOLE_TOKEN = env('STIPEND_CONSOLE_TOKEN') ?? randomBytes(16).toString('hex');
 
-const ownerKey = readKeyJson(OWNER_KEY_PATH);
+/**
+ * Read only mode: without the owner key file and the approval seed the
+ * console can still serve every page from chain views, which is how
+ * anyone with a repo checkout can look at a live engine. Admin calls
+ * are refused, because there is nothing here that may sign. The owner
+ * key itself is never distributed with the code.
+ */
+const READ_ONLY = !(
+  OWNER_KEY_PATH &&
+  existsSync(OWNER_KEY_PATH) &&
+  APPROVAL_PRIV_PATH &&
+  existsSync(APPROVAL_PRIV_PATH)
+);
+
+const ownerKey = READ_ONLY
+  ? { accountId: OWNER_ACCOUNT_ID, privateKey: 'ed25519:11111111111111111111111111111111' }
+  : readKeyJson(OWNER_KEY_PATH as string);
 const engine = new EngineClient({
   networkId: 'testnet',
   nodeUrl: RPC_URL,
@@ -82,9 +90,19 @@ const engine = new EngineClient({
 const owner = createOwnerTools({
   engine,
   contractId: CONTRACT_ID,
-  approvalPrivateKeyBase64: readSeed(APPROVAL_PRIV_PATH),
+  approvalPrivateKeyBase64: READ_ONLY
+    ? 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+    : readSeed(APPROVAL_PRIV_PATH as string),
 });
 const attempts = new AttemptLog(ATTEMPTS_PATH);
+/**
+ * Owner token guarding every state changing call. The console process
+ * holds the engine owner key, so an unauthenticated admin endpoint
+ * would hand that power to anyone who can reach the port. Set
+ * STIPEND_CONSOLE_TOKEN to choose the token; otherwise one is
+ * generated at boot and printed once in the startup log.
+ */
+const CONSOLE_TOKEN = env('STIPEND_CONSOLE_TOKEN') ?? randomBytes(16).toString('hex');
 
 // ----- raw RPC views the SDK does not wrap -----------------------------------
 
@@ -168,6 +186,10 @@ app.use(express.json({ limit: '256kb' }));
 // default, and CONSOLE_HOST is the explicit opt in to expose it.
 app.use((req, res, next) => {
   if (req.method === 'POST' && req.path.startsWith('/api/')) {
+    if (READ_ONLY) {
+      res.status(503).json({ error: 'console is read only: no owner key configured' });
+      return;
+    }
     const given = req.header('x-console-token');
     const a = Buffer.from(given ?? '');
     const b = Buffer.from(CONSOLE_TOKEN);
@@ -194,7 +216,7 @@ const wrap =
   };
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, contract: CONTRACT_ID });
+  res.json({ ok: true, contract: CONTRACT_ID, readOnly: READ_ONLY });
 });
 
 app.get(
@@ -366,5 +388,9 @@ app.use(express.static(path.join(APP_DIR, 'public')));
 
 app.listen(PORT, HOST, () => {
   console.log(`stipend console on ${HOST}:${PORT} — engine ${CONTRACT_ID}`);
-  console.log(`owner token for admin actions: ${CONSOLE_TOKEN}`);
+  if (READ_ONLY) {
+    console.log('read only mode: no owner key configured, admin actions are disabled');
+  } else {
+    console.log(`owner token for admin actions: ${CONSOLE_TOKEN}`);
+  }
 });

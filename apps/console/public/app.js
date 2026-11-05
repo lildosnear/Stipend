@@ -308,7 +308,9 @@ async function init() {
   try {
     const health = await api('/health');
     document.getElementById('contract').textContent = health.contract;
-    document.getElementById('health').textContent = 'connected';
+    document.getElementById('health').textContent = health.readOnly
+      ? 'connected, read only'
+      : 'connected';
     document.getElementById('health').classList.add('good');
   } catch {
     document.getElementById('health').textContent = 'unreachable';

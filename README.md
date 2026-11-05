@@ -160,6 +160,12 @@ STIPEND_APPROVAL_PRIV_PATH=../../keys/stipend-approval.priv.b64 \
 npm start        # http://localhost:8282
 ```
 
+To only look at a live engine, set just the contract id and start
+the console: without the owner key files it runs read only, every
+page works from chain views, and admin actions are refused. The
+owner key is never shared with the code, so this read only mode is
+how anyone checks a deployed engine from a plain checkout.
+
 ### If you only want to check the SDK
 
 No deploy needed. From the repo root:

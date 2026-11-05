@@ -60,19 +60,32 @@ Owner calls (set a stipend, list holds, approve, pause, revoke) are in the same 
 
 ## Running the demo
 
-Build the contract (the build script sets a compiler flag the NEAR libraries need; without it, contract rejections lose their reason text on chain):
+### Prerequisites
+
+Node 20 or newer. Rust with the `wasm32-unknown-unknown` target is needed only if you rebuild the contract; the demo can use the prebuilt wasm that ships in this repo under `contracts/policy-engine/target/` instead. Deploying needs a funded NEAR testnet payer account holding at least 7 test NEAR, with its key file at the path in `STIPEND_PAYER_KEY_PATH`, or at `~/.nyx-keys/payer.testnet.json` by default.
+
+Install and build everything first (the reference app and console run from `dist/`, so the build has to come before any demo command):
+
+```sh
+npm install
+npm run build
+```
+
+Build the contract (the build script sets a compiler flag the NEAR libraries need; without it, contract rejections lose their reason text on chain). Skip this step if you use the prebuilt wasm that ships in this repo:
 
 ```sh
 scripts/build-contract.sh
 ```
 
-Deploy to testnet. This creates the engine and seller accounts under a funded testnet payer account, deploys the engine, and registers a demo agent called bot with a 0.05 NEAR cap per payment and a 1 NEAR budget per day. Account ids and public keys land in `keys/deploy-info.json`:
+Deploy to testnet. This creates the engine and seller accounts under your funded testnet payer account, deploys the engine, and registers a demo agent called bot with a 0.05 NEAR cap per payment and a 1 NEAR budget per day. Account ids and public keys land in `keys/deploy-info.json`:
 
 ```sh
 node scripts/deploy-testnet.mjs
 ```
 
-Run the seller and the demo agent (env values come from `keys/deploy-info.json` and the key files in `keys/`):
+The `<engine>` and `<seller>` values in the commands below are the account ids from `keys/deploy-info.json`, and the key files in `keys/` are named by account id.
+
+Run the seller and the demo agent:
 
 ```sh
 cd apps/reference-app
@@ -93,6 +106,16 @@ STIPEND_CONTRACT_ID=<engine> STIPEND_OWNER_ACCOUNT_ID=<engine> \
 STIPEND_OWNER_KEY_PATH=../../keys/<engine>.json \
 STIPEND_APPROVAL_PRIV_PATH=../../keys/stipend-approval.priv.b64 \
 npm start        # http://localhost:8282
+```
+
+### If you only want to check the SDK
+
+No deploy needed. From the repo root:
+
+```sh
+npm install
+npm run build
+npm test   # 13 of 13, covering signing, amount handling, and a full purchase flow
 ```
 
 ## Roadmap (not in version one)

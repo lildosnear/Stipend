@@ -25,33 +25,78 @@ Agents are starting to hold real spending power, and the usual protection is a w
 Agent side, in an AI application:
 
 ```ts
-import { createStipendClient } from "@stipend/sdk";
+import { AttemptLog, EngineClient, createStipendClient } from "@stipend/sdk";
 
-const stipend = createStipendClient({
-  contractId: "engine.stipend.testnet",
-  agentId: "research-agent",
-  signer, // an authorized caller for the agent
+// One engine client: it talks to the policy engine contract and signs
+// calls with an account the agent's stipend authorizes.
+const engine = new EngineClient({
+  networkId: "testnet",
+  nodeUrl: "https://rpc.testnet.near.org",
+  contractId: "stipend.testnet",
+  accountId: "caller.testnet", // an authorized caller for the agent
+  privateKey: "ed25519:<the caller account key>",
 });
 
-// Pays for a priced resource. Throws a typed error if the
-// payment is blocked, or returns a hold id if it needs approval.
+const stipend = createStipendClient({
+  engine,
+  agentId: "bot",
+  sellerBaseUrl: "http://localhost:8787",
+  attemptLog: new AttemptLog("data/attempts.json"), // optional: records blocked attempts for the owner
+});
+
+// Pays for a priced resource and returns the on chain receipt and the
+// delivered content. If the engine blocks the payment, this throws a
+// StipendError with a typed code (CAP, BUDGET, VENDOR, EXPIRED, and
+// friends), and the blocked attempt lands in the attempt log.
 const { receipt, delivery } = await stipend.purchase("data:market-report");
 ```
 
-App side, in an API or agent wallet that sells to agents:
+Seller side, in an API that sells to agents (`engine` is an EngineClient like the one above; any signer works, the seller only reads the engine):
 
 ```ts
-import { stipendSeller } from "@stipend/sdk";
+import { createSellerApp } from "@stipend/sdk";
 
-// Wrap a priced resource. Buyers pay through their stipend;
-// settlement only happens after the policy engine approves it.
-app.get("/resource/data:market-report", stipendSeller({
-  price: "1000000000000000000000", // 0.001 NEAR
-  sellerKey, // signs quotes buyers submit to the engine
-}));
+const seller = createSellerApp({
+  engine,
+  contractId: "stipend.testnet",
+  sellerAccountId: "seller.testnet", // receives the payments
+  quotePrivateKeyBase64: "<base64 seed of the quote key registered in agents' allowlists>",
+  priceTable: {
+    "data:market-report": { amount: 1000000000000000000000n, asset: "NEAR" }, // 0.001 NEAR
+  },
+  deliver: (resource) => ({ resource, headline: "NEAR holds its range" }),
+});
+
+seller.listen(8787); // serves /vault-quote, /pay and /deliver
 ```
 
-Owner calls (set a stipend, list holds, approve, pause, revoke) are in the same SDK.
+The seller signs a quote for each resource. A buyer agent submits the quote to the engine, the engine checks the buyer's stipend and settles, and only then does the seller deliver.
+
+Owner side, the same SDK (`engine` must be signed by the engine owner account):
+
+```ts
+import { createOwnerTools } from "@stipend/sdk";
+
+const owner = createOwnerTools({
+  engine,
+  contractId: "stipend.testnet",
+  approvalPrivateKeyBase64: "<base64 seed of the approval key registered in the engine>",
+});
+
+await owner.setStipend({
+  agentId: "bot",
+  perPaymentCap: "50000000000000000000000", // 0.05 NEAR, yocto as a string
+  dailyBudget: "1000000000000000000000000", // 1 NEAR
+  authorizedCallers: ["caller.testnet"],
+  allowlist: [{ account: "seller.testnet", quote_key: "<base64 quote key>", label: "Test data API" }],
+});
+
+// Held payments are approved one by one with a signed grant:
+// await owner.approvePayment({ agentId, paymentId, quote });
+// The owner can also pauseAll(), resumeAll(), revoke(agentId) and
+// reactivate(agentId). Blocked attempts are read from the attempt log
+// (see the owner console in apps/console for a working holds queue).
+```
 
 ## Repository layout
 

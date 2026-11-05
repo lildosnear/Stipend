@@ -1,0 +1,1 @@
+{"description":"Stipend: an SDK and on chain policy engine that any agent wallet or AI application can integrate.","devDependencies":{"typescript":"^5.6.0","vitest":"^3.0.0"},"name":"stipend","private":true,"scripts":{"build":"tsc -b","test":"vitest run"},"version":"0.1.0","workspaces":["packages/*","apps/*"]}

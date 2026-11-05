@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stipend Console</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Stipend Console</h1>
+        <p class="sub">Engine: <span id="contract">loading</span></p>
+      </div>
+      <div id="health" class="health">checking</div>
+    </header>
+
+    <nav id="nav">
+      <button data-page="overview" class="active">Overview</button>
+      <button data-page="stipends">Stipends</button>
+      <button data-page="payments">Payments</button>
+      <button data-page="holds">Holds</button>
+      <button data-page="blocked">Blocked attempts</button>
+    </nav>
+
+    <main>
+      <p id="message" class="message" hidden></p>
+
+      <section id="page-overview" class="page">
+        <div class="cards" id="overview-cards"></div>
+      </section>
+
+      <section id="page-stipends" class="page" hidden>
+        <div class="bar">
+          <h2>Stipends</h2>
+          <span>
+            <button id="pause-btn">Pause all</button>
+            <button id="resume-btn">Resume all</button>
+            <button data-refresh="stipends">Refresh</button>
+          </span>
+        </div>
+        <div id="stipends-table"></div>
+      </section>
+
+      <section id="page-payments" class="page" hidden>
+        <div class="bar">
+          <h2>Payments</h2>
+          <button data-refresh="payments">Refresh</button>
+        </div>
+        <div id="payments-table"></div>
+      </section>
+
+      <section id="page-holds" class="page" hidden>
+        <div class="bar">
+          <h2>Holds</h2>
+          <button data-refresh="holds">Refresh</button>
+        </div>
+        <p class="hint">
+          Payments the engine held back for going over a cap or the daily budget.
+          Approving settles the payment once, with a signed grant, at the price
+          the vendor quotes now. If the price moved, approval is refused.
+        </p>
+        <div id="holds-table"></div>
+      </section>
+
+      <section id="page-blocked" class="page" hidden>
+        <div class="bar">
+          <h2>Blocked attempts</h2>
+          <button data-refresh="blocked">Refresh</button>
+        </div>
+        <div id="blocked-table"></div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

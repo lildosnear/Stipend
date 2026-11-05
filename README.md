@@ -6,6 +6,8 @@ Stipend is an SDK and on chain policy engine that any agent wallet or AI applica
 
 Built at NEAR Hackathon 2026 (AI Security & Defense, Agent Economy). Status: version one, NEAR testnet.
 
+**Live on NEAR testnet:** the policy engine is deployed at `stipend.testnet`, with a demo agent (cap 0.05 NEAR per payment, budget 1 NEAR per day) buying from a test seller. Every flow described below has been run against it end to end: normal buys settle and deliver, an over cap buy is held and then settled after an owner signed approval, and expired quotes, forged prices, and unknown vendors are all blocked with their reasons.
+
 ## Why
 
 Agents are starting to hold real spending power, and the usual protection is a written instruction: do not overspend, do not pay strangers. Instructions fail. Stipend moves the protection into a contract that checks every payment before any money moves: who is paying, who is being paid, how much, and whether it fits the stipend the owner set.

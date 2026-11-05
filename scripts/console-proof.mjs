@@ -23,7 +23,7 @@ const agent = createStipendClient({
   engine,
   agentId: 'bot',
   sellerBaseUrl: SELLER,
-  attemptLog: new AttemptLog(join(ROOT, 'data/attempts.json')),
+  attemptLog: new AttemptLog(join(ROOT, 'data/attempts-stipend.json')),
 });
 
 const j = async (res) => ({ status: res.status, body: await res.json().catch(() => null) });

@@ -56,9 +56,11 @@
           <button data-refresh="holds">Refresh</button>
         </div>
         <p class="hint">
-          Payments the engine held back for going over a cap or the daily budget.
-          Approving settles the payment once, with a signed grant, at the price
-          the vendor quotes now. If the price moved, approval is refused.
+          Payments the engine held back for breaking the cap or the daily
+          budget, filed in the engine's on chain queue. Approve records the
+          decision on chain, then executes the payment; the cap is waived
+          for that payment, the daily budget is not. Reject closes the
+          hold. Holds expire after 24 hours.
         </p>
         <div id="holds-table"></div>
       </section>

@@ -1,14 +1,16 @@
 'use strict';
 
-/** Format a yocto amount as NEAR: string based, up to 6 decimals, trimmed. */
+/** Format a yocto amount as NEAR: rounded to 6 decimals, trimmed. */
 function fmtNear(yocto) {
   if (yocto === null || yocto === undefined) return 'n/a';
   let digits = String(yocto);
   if (!/^\d+$/.test(digits)) digits = BigInt(Math.round(Number(digits))).toString();
-  digits = digits.padStart(25, '0');
-  const whole = digits.slice(0, digits.length - 24);
-  const frac = digits.slice(digits.length - 24, digits.length - 18).replace(/0+$/, '');
-  return (frac ? `${whole}.${frac}` : whole) + ' NEAR';
+  // Round at micro NEAR (6 decimals) instead of truncating, so values
+  // that crossed the chain as doubles do not show dust like 0.049999.
+  const micro = (BigInt(digits) + 500000000000000000n) / 1000000000000000000n;
+  const whole = micro / 1000000n;
+  const frac = (micro % 1000000n).toString().padStart(6, '0').replace(/0+$/, '');
+  return (frac ? `${whole}.${frac}` : `${whole}`) + ' NEAR';
 }
 
 function esc(value) {
@@ -192,10 +194,17 @@ let holdsCache = [];
 
 async function load(page) {
   showMessage('');
+  // Chain reads take a few seconds; say so instead of showing a blank
+  // page that looks broken.
+  const container = document.getElementById(
+    page === 'overview' ? 'overview-cards' : `${page}-table`,
+  );
+  if (container) container.innerHTML = '<p class="empty">Loading from chain...</p>';
   try {
     const result = await loaders[page]();
     if (page === 'holds') holdsCache = result || [];
   } catch (e) {
+    if (container) container.innerHTML = '';
     showMessage(`could not load ${page}: ${e.message}`, true);
   }
 }

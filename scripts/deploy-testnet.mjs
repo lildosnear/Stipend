@@ -18,7 +18,7 @@ const WASM = join(
   'contracts/policy-engine/target/wasm32-unknown-unknown/release/stipend_policy_engine.wasm',
 );
 const PAYER_KEY_PATH =
-  process.env['STIPEND_PAYER_KEY_PATH'] ?? join(process.env['HOME'], '.nyx-keys/payer.testnet.json');
+  process.env['STIPEND_PAYER_KEY_PATH'] ?? join(process.env['HOME'], '.stipend-keys/payer.testnet.json');
 
 const NEAR = (n) => BigInt(Math.round(n * 1e24)).toString();
 

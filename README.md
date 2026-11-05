@@ -114,7 +114,7 @@ await owner.setStipend({
 
 ### Prerequisites
 
-Node 20 or newer. Rust with the `wasm32-unknown-unknown` target is needed only if you rebuild the contract; the demo can use the prebuilt wasm that ships in this repo under `contracts/policy-engine/target/` instead. Deploying needs a funded NEAR testnet payer account holding at least 7 test NEAR, with its key file at the path in `STIPEND_PAYER_KEY_PATH`, or at `~/.nyx-keys/payer.testnet.json` by default.
+Node 20 or newer. Rust with the `wasm32-unknown-unknown` target is needed only if you rebuild the contract; the demo can use the prebuilt wasm that ships in this repo under `contracts/policy-engine/target/` instead. Deploying needs a funded NEAR testnet payer account holding at least 7 test NEAR, with its key file at the path in `STIPEND_PAYER_KEY_PATH`, or at `~/.stipend-keys/payer.testnet.json` by default.
 
 Install and build everything first (the reference app and console run from `dist/`, so the build has to come before any demo command):
 

@@ -93,7 +93,7 @@ async function loadOverview() {
 async function loadStipends() {
   const rows = await api('/api/stipends');
   const html = table(
-    ['Agent', 'Status', 'Cap per payment', 'Daily budget', 'Spent today', 'Policy v', 'Callers', 'Action'],
+    ['Agent', 'Status', 'Cap per payment', 'Daily budget', 'Spent today', 'Policy v', 'Callers', 'Vendors', 'Action'],
     rows.map((a) => {
       const action =
         a.status === 'Revoked'
@@ -107,6 +107,7 @@ async function loadStipends() {
         esc(fmtNear(a.spent_today)),
         esc(a.policy_version),
         esc((a.authorized_callers || []).join(', ')),
+        esc((a.allowlist || []).map((e) => e.account).join(', ')),
         action,
       ];
     }),

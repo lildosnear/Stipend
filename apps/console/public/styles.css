@@ -30,6 +30,8 @@ header {
 
 header h1 { margin: 0; font-size: 22px; }
 header .sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.brand { display: flex; align-items: center; gap: 14px; }
+.brand .logo { height: 44px; width: auto; display: block; }
 .health { font-size: 13px; color: var(--muted); }
 .health.good { color: var(--good); }
 .health.bad { color: var(--bad); }

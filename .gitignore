@@ -4,3 +4,4 @@ target/
 *.testnet.json
 *.priv.b64
 .env
+*.tsbuildinfo
